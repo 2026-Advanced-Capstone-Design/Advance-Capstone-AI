@@ -1,0 +1,11 @@
+services:
+  ai-server:
+    build: .
+    container_name: news-lens-ai
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

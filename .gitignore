@@ -2,8 +2,12 @@
 .env
 __pycache__/
 *.pyc
+*.pyo
 data/raw/
 *.csv
 *.pt
 *.bin
+*.safetensors
 .DS_Store
+models/
+.claude/
