@@ -1,0 +1,25 @@
+# 환경변수 (API 키 등 민감 정보)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ChromaDB 벡터 저장소 (로컬 생성 파일)
+chroma_db/
+
+# 데이터 파일
+*.xlsx
+*.csv
+
+# IDE
+.idea/
+.vscode/
+
+# 기타
+.DS_Store
+*.log

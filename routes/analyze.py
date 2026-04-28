@@ -9,6 +9,7 @@ from services.embedder import embed_and_store
 from services.analyzer import analyze as run_analysis
 from config import SPRING_CALLBACK_URL
 
+# 블루 프린트 객체를 생성하여 준다. 
 analyze_bp = Blueprint("analyze", __name__)
 
 
@@ -19,13 +20,14 @@ def _notify_spring(payload: dict):
     except Exception as e:
         print(f"[WARN] Spring 콜백 전송 실패: {e}")
 
-
+# 파이브 라인 실행
 def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
     """전처리 → 요약 → 임베딩 파이프라인 (별도 스레드에서 실행)"""
     try:
         update_task(task_id, TaskStatus.ANALYZING)
 
-        # Step 1: 전처리
+        # Step 1: 전처리 
+        #1.) html 태그를 제거한다.
         is_html = input_type == "URL"
         preprocessed = preprocess(text, is_html=is_html)
         cleaned_text = preprocessed["cleaned"]
@@ -62,6 +64,7 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
             "keywords": summary.get("keywords", []),
             "topic": summary.get("topic", ""),
             "sentence_count": len(preprocessed["sentences"]),
+            "sources": preprocessed.get("sources", []),
             "bias_label": bias_label,
             "bias_confidence": label_result.get("confidence", 0.0),
             "bias_reason": label_result.get("reason", ""),
