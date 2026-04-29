@@ -66,7 +66,10 @@ class YoutubeResult(BaseModel):
     neutral_pct: float
     bot_count: int
     bot_pct: float
-    summary: str
+    positive_summary: str
+    negative_summary: str
+    neutral_summary: str
+    special_notes: str
     comments: List[SentimentResult]
 
 # ===== 감정분류 + 봇탐지 통합 프롬프트 =====
@@ -75,9 +78,19 @@ ANALYZE_SYSTEM_PROMPT = """당신은 한국어 뉴스·정치·경제 댓글의 
 ━━━ 감정 분류 기준 ━━━
 
 [라벨 정의]
-- 부정: 분노, 실망, 비판, 욕설, 혐오, 불만, 냉소, 불신, 우려, 반대, 조롱, 위협 인식
-- 긍정: 지지, 칭찬, 공감, 감사, 기대, 응원, 놀라움(긍정적), 희망
+- 부정: 분노, 실망, 비판, 혐오, 불만, 냉소, 불신, 우려, 반대, 조롱, 위협 인식 (단, 욕설이 강조어로만 쓰인 경우 제외)
+- 긍정: 지지, 칭찬, 공감, 감사, 기대, 응원, 놀라움(긍정적), 희망, 웃음/유머
 - 중립: 감정 없이 사실만 전달하거나 순수하게 판단을 보류
+
+[욕설 강조어 판별 — 중요]
+한국어 인터넷 슬랭에서 "ㅅㅂ", "존나", "ㅈㄴ", "개" 등은 욕설이 아닌 강조어로 쓰일 수 있습니다.
+아래 패턴은 욕설이 포함되어도 긍정으로 분류하세요:
+- "ㅋ"가 2개 이상 포함 + "웃기다/웃겨/재밌다/대박/미쳤다" 등 긍정 단어
+- 예: "존나 웃기네 ㅅㅂ ㅋㅋㅋㅋㅋ" → 긍정 (웃음 반응)
+- 예: "ㅅㅂ ㅋㅋㅋㅋ 개웃겨" → 긍정
+- 예: "ㅈㄴ 대박이다 ㅋㅋㅋ" → 긍정
+반면 욕설 + 비판 대상 + 분노 맥락이면 부정으로 분류하세요:
+- 예: "ㅅㅂ 저 놈들 때문에 나라 망한다" → 부정
 
 [반드시 부정으로 분류할 패턴]
 1. 인터넷 슬랭 충격/경악 — 부정적 맥락에서 사용 시
@@ -234,17 +247,50 @@ async def analyze_all_parallel(
 
 # ===== 요약 프롬프트 =====
 SUMMARY_SYSTEM_PROMPT = """당신은 한국어 뉴스 댓글 여론 분석 전문가입니다.
-댓글 감정 분류 결과와 대표 댓글을 받아 아래 형식으로 요약하세요.
+댓글 감정 분류 결과와 대표 댓글을 받아 아래 형식으로 정확히 출력하세요.
 
-[출력 형식]
-전반적 여론: (한 문장으로 전체 분위기 요약)
-지배 감정: (부정/긍정/중립 중 가장 많은 것과 비율, 그 이유 한 줄)
-핵심 주제: (댓글에서 자주 언급된 주제 또는 키워드 2~3가지)
-주목할 댓글: (가장 대표적인 댓글 1개 인용 후 한 줄 해석)
-특이사항: (봇 의심 댓글, 선동 패턴, 여론 양극화 등 눈에 띄는 패턴 — 없으면 "없음")"""
+[출력 형식 — 엄격히 준수]
+[긍정]
+(긍정 댓글들의 주요 의견을 1~2문장으로 요약. 긍정 댓글이 없으면 "긍정 댓글 없음")
+[부정]
+(부정 댓글들의 주요 의견을 1~2문장으로 요약. 부정 댓글이 없으면 "부정 댓글 없음")
+[중립]
+(중립 댓글들의 주요 의견을 1~2문장으로 요약. 중립 댓글이 없으면 "중립 댓글 없음")
+[특이사항]
+(봇 의심 댓글, 선동 패턴, 여론 양극화 등 눈에 띄는 패턴 — 없으면 "없음")
+
+- 각 섹션 헤더([긍정], [부정], [중립], [특이사항])는 반드시 포함하세요.
+- 헤더 외 부가 설명은 금지합니다."""
 
 
-async def summarize_comments_async(texts: List[str], analysis: List[Tuple]) -> str:
+def _parse_summary(text: str) -> dict:
+    """GPT 감정별 요약 텍스트를 파싱해서 dict로 반환."""
+    sections = {"긍정": "", "부정": "", "중립": "", "특이사항": ""}
+    current = None
+    lines_buf: List[str] = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in ("[긍정]", "[부정]", "[중립]", "[특이사항]"):
+            if current is not None:
+                sections[current] = " ".join(lines_buf).strip()
+            current = stripped[1:-1]
+            lines_buf = []
+        elif current is not None and stripped:
+            lines_buf.append(stripped)
+
+    if current is not None:
+        sections[current] = " ".join(lines_buf).strip()
+
+    return {
+        "positive_summary": sections["긍정"] or "(긍정 댓글 없음)",
+        "negative_summary": sections["부정"] or "(부정 댓글 없음)",
+        "neutral_summary":  sections["중립"] or "(중립 댓글 없음)",
+        "special_notes":    sections["특이사항"] or "없음",
+    }
+
+
+async def summarize_comments_async(texts: List[str], analysis: List[Tuple]) -> dict:
     total = len(analysis)
     neg       = sum(1 for a in analysis if a[0] == "부정")
     pos       = sum(1 for a in analysis if a[0] == "긍정")
@@ -277,12 +323,18 @@ async def summarize_comments_async(texts: List[str], analysis: List[Tuple]) -> s
                 {"role": "user",   "content": user_content}
             ],
             temperature=0.3,
-            max_tokens=400,
+            max_tokens=500,
         )
-        return response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content.strip()
+        return _parse_summary(raw)
     except Exception as e:
         print(f"[GPT 요약 오류] {e}")
-        return "(요약 실패)"
+        return {
+            "positive_summary": "(요약 실패)",
+            "negative_summary": "(요약 실패)",
+            "neutral_summary":  "(요약 실패)",
+            "special_notes":    "(요약 실패)",
+        }
 
 
 # ===== 핵심 분석 로직 (비동기) =====
@@ -323,7 +375,7 @@ async def _analyze_comments(comments: List[CommentItem]):
             bot_reasons=reasons,
         ))
 
-    return results, positive, negative, neutral, bot_count, len(results), summary
+    return results, positive, negative, neutral, bot_count, len(results), summary["positive_summary"], summary["negative_summary"], summary["neutral_summary"], summary["special_notes"]
 
 
 def _fetch_youtube_comments(video_id: str):
@@ -459,7 +511,12 @@ async def _stream_analysis(
     neutral   = sum(1 for a in all_analysis if a[0] == "중립")
     bot_count = sum(1 for a in all_analysis if a[3])
 
-    yield _sse("summary", {"summary": summary})
+    yield _sse("summary", {
+        "positive_summary": summary["positive_summary"],
+        "negative_summary": summary["negative_summary"],
+        "neutral_summary":  summary["neutral_summary"],
+        "special_notes":    summary["special_notes"],
+    })
     yield _sse("stats", {
         "total": total,
         "positive": positive,
@@ -502,7 +559,7 @@ async def analyze_youtube_by_id(video_id: str):
         raise HTTPException(status_code=404, detail="수집된 댓글이 없습니다.")
 
     try:
-        results, positive, negative, neutral, bot_count, total, summary = await _analyze_comments(comments)
+        results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
         return YoutubeResult(
             video_title=video_title,
             channel_name=channel_name,
@@ -518,7 +575,10 @@ async def analyze_youtube_by_id(video_id: str):
             neutral_pct=round(neutral  / total * 100, 1),
             bot_count=bot_count,
             bot_pct=round(bot_count / total * 100, 1),
-            summary=summary,
+            positive_summary=pos_sum,
+            negative_summary=neg_sum,
+            neutral_summary=neu_sum,
+            special_notes=notes,
             comments=results,
         )
     except Exception as e:
@@ -530,7 +590,7 @@ async def analyze_comments_direct(comments: List[CommentItem]):
     if not comments:
         raise HTTPException(status_code=400, detail="댓글이 없습니다.")
     try:
-        results, positive, negative, neutral, bot_count, total, summary = await _analyze_comments(comments)
+        results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
         return YoutubeResult(
             video_title="직접 입력",
             video_comment_count=str(total),
@@ -543,7 +603,10 @@ async def analyze_comments_direct(comments: List[CommentItem]):
             neutral_pct=round(neutral  / total * 100, 1),
             bot_count=bot_count,
             bot_pct=round(bot_count / total * 100, 1),
-            summary=summary,
+            positive_summary=pos_sum,
+            negative_summary=neg_sum,
+            neutral_summary=neu_sum,
+            special_notes=notes,
             comments=results,
         )
     except Exception as e:
