@@ -44,7 +44,10 @@ POST http://localhost:8000/analyze/comments
   "neutral_pct": 38.8,
   "bot_count": 5,
   "bot_pct": 5.1,
-  "summary": "전반적 여론: 비판적 댓글이 다수를 차지하며 부정적 여론이 지배적입니다.\n지배 감정: 부정 (40.8%) — 정치·언론에 대한 불신과 분노가 주를 이룸\n핵심 주제: 편파보도, 정치 비판, 경제 불만\n주목할 댓글: \"진짜 편파보도 너무하다\" — 언론 신뢰도에 대한 불만을 직접적으로 표현\n특이사항: 동일 문구 반복 댓글 3건 봇 의심",
+  "positive_summary": "영상 내용에 공감하거나 취재 방향을 지지하는 댓글이 다수 포함됩니다.",
+  "negative_summary": "편파보도 및 언론 불신을 표현하는 비판 댓글이 주를 이룹니다.",
+  "neutral_summary": "사실만 간략히 언급하거나 추가 정보를 묻는 댓글이 포함됩니다.",
+  "special_notes": "동일 문구 반복 댓글 3건 봇 의심",
   "comments": [
     {
       "text": "댓글 내용",
@@ -83,7 +86,10 @@ POST http://localhost:8000/analyze/comments
 | positive_pct / negative_pct / neutral_pct | float | 각 비율 (%) |
 | bot_count | int | 봇으로 판정된 댓글 수 |
 | bot_pct | float | 봇 비율 (%) |
-| summary | string | GPT가 생성한 여론 요약 (줄바꿈 포함 멀티라인) |
+| positive_summary | string | 긍정 댓글 여론 요약 (GPT 생성) |
+| negative_summary | string | 부정 댓글 여론 요약 (GPT 생성) |
+| neutral_summary | string | 중립 댓글 여론 요약 (GPT 생성) |
+| special_notes | string | 봇 의심·선동 패턴 등 특이사항 (없으면 "없음") |
 
 ### comments 배열 각 항목
 
