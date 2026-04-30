@@ -1,6 +1,7 @@
 import json
 from openai import OpenAI
 from config import OPENAI_API_KEY, GPT_MINI_MODEL, GPT_STRONG_MODEL
+from services.cache import get_background, set_background
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -42,6 +43,39 @@ _ANALYSIS_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
 
 _ANALYSIS_USER = "[기사]\n{text}"
 
+# ── Step 3: 문장 하이라이팅 (gpt-4o-mini) ────────────────────────────────
+_HIGHLIGHT_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
+아래 문장 목록에서 편향이 드러나는 문장을 찾아 JSON으로 반환하세요.
+
+[편향 유형]
+- vocab    : 감정적·편향적 단어를 사용한 문장
+- framing  : 특정 관점을 부각하거나 약화시키는 구조의 문장
+- citation : 한쪽에 치우친 인용이 포함된 문장
+- omission : 반대 관점을 무시하거나 중요한 사실을 누락한 문장
+
+[제약 조건]
+- 편향이 명확한 문장만 선택하세요 (최대 7개)
+- 편향이 없으면 highlighted_sentences를 빈 배열로 반환하세요
+- sentence 값은 아래 문장 목록의 원문을 그대로 사용하세요
+- score: 0.0(약함)~1.0(강함)
+- 반드시 JSON만 출력하세요
+
+[응답 형식]
+{{
+  "highlighted_sentences": [
+    {{"sentence": "문장 원문 그대로", "type": "vocab",    "score": 0.85}},
+    {{"sentence": "문장 원문 그대로", "type": "framing",  "score": 0.72}}
+  ]
+}}"""
+
+_HIGHLIGHT_USER = """[분석된 편향 근거]
+어휘 선택: {vocab_reason}
+프레이밍: {framing_reason}
+인용 편향: {citation_reason}
+
+[문장 목록]
+{sentences}"""
+
 
 def _generate_background(topic: str, keywords: list[str]) -> str:
     """Model Tiering: gpt-4o-mini로 배경 지식 생성 (Generated Knowledge)"""
@@ -74,18 +108,53 @@ def _run_cot_analysis(text: str, background: str) -> dict:
     return json.loads(response.choices[0].message.content)
 
 
+def _run_highlight_analysis(sentences: list[str], cot: dict) -> list[dict]:
+    """gpt-4o-mini로 편향 문장 하이라이팅 (최대 30문장 처리)"""
+    if not sentences:
+        return []
+
+    # 번호를 붙여서 GPT가 문장을 구분하기 쉽게 구성
+    sentence_text = "\n".join(
+        f"{i+1}. {s}" for i, s in enumerate(sentences[:30])
+    )
+
+    user = _HIGHLIGHT_USER.format(
+        vocab_reason=cot.get("step1_vocab", {}).get("reason", ""),
+        framing_reason=cot.get("step2_framing", {}).get("reason", ""),
+        citation_reason=cot.get("step3_citation", {}).get("reason", ""),
+        sentences=sentence_text,
+    )
+
+    response = client.chat.completions.create(
+        model=GPT_MINI_MODEL,
+        messages=[
+            {"role": "system", "content": _HIGHLIGHT_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.1,
+        max_tokens=800,
+        response_format={"type": "json_object"},
+    )
+
+    result = json.loads(response.choices[0].message.content)
+    return result.get("highlighted_sentences", [])
+
+
 def _compute_scores(cot: dict, label: str) -> dict:
-    """CoT 결과 → 4대 지표 + 종합 점수 계산"""
+    """CoT 결과 → 4대 지표 + 종합 점수 계산 (각 25% 균등 가중치)"""
     vocab    = cot.get("step1_vocab",    {}).get("score", 0.5)
     framing  = cot.get("step2_framing",  {}).get("score", 0.5)
     citation = cot.get("step3_citation", {}).get("score", 0.5)
     omission = cot.get("step4_omission", {}).get("score", 0.5)
 
-    emotion_neutrality = round(1.0 - vocab,    3)
-    fact_ratio         = round(1.0 - citation, 3)
-    source_balance     = round(1.0 - framing,  3)
-    bias_score         = round((vocab + framing + citation + omission) / 4, 3)
-    total_score        = int((emotion_neutrality + fact_ratio + source_balance + (1 - bias_score)) / 4 * 100)
+    # 각 편향 점수를 반전 → 4대 독립 지표 (높을수록 좋음)
+    emotion_neutrality  = round(1.0 - vocab,    3)  # 어휘 편향 없을수록 ↑
+    fact_ratio          = round(1.0 - citation, 3)  # 인용 편향 없을수록 ↑ (Google API로 대체 가능)
+    source_balance      = round(1.0 - framing,  3)  # 프레이밍 없을수록 ↑
+    omission_neutrality = round(1.0 - omission, 3)  # 정보 생략 없을수록 ↑
+
+    bias_score = round((vocab + framing + citation + omission) / 4, 3)
+    # total_score는 routes/analyze.py에서 섹션별 편향도 포함하여 최종 계산
 
     direction_map = {"progressive": "left", "conservative": "right"}
     bias_direction = direction_map.get(label, "center")
@@ -94,26 +163,37 @@ def _compute_scores(cot: dict, label: str) -> dict:
     spectrum_label = spectrum_map.get(label, "중립")
 
     return {
-        "emotion_neutrality": emotion_neutrality,
-        "fact_ratio":         fact_ratio,
-        "source_balance":     source_balance,
-        "bias_score":         bias_score,
-        "total_score":        total_score,
-        "bias_direction":     cot.get("bias_direction", bias_direction),
-        "spectrum_label":     cot.get("spectrum_label", spectrum_label),
-        "cot_vocab_reason":   cot.get("step1_vocab",    {}).get("reason", ""),
-        "cot_framing_reason": cot.get("step2_framing",  {}).get("reason", ""),
-        "cot_citation_reason":cot.get("step3_citation", {}).get("reason", ""),
-        "cot_omission_reason":cot.get("step4_omission", {}).get("reason", ""),
+        "emotion_neutrality":  emotion_neutrality,
+        "fact_ratio":          fact_ratio,
+        "source_balance":      source_balance,
+        "omission_neutrality": omission_neutrality,
+        "bias_score":          bias_score,
+        "bias_direction":      cot.get("bias_direction", bias_direction),
+        "spectrum_label":      cot.get("spectrum_label", spectrum_label),
+        "cot_vocab_reason":    cot.get("step1_vocab",    {}).get("reason", ""),
+        "cot_framing_reason":  cot.get("step2_framing",  {}).get("reason", ""),
+        "cot_citation_reason": cot.get("step3_citation", {}).get("reason", ""),
+        "cot_omission_reason": cot.get("step4_omission", {}).get("reason", ""),
     }
 
 
-def analyze(text: str, topic: str, keywords: list[str], bias_label: str) -> dict:
+def _make_topic_key(topic: str, keywords: list[str]) -> str:
+    return f"{topic.strip().lower()}:{','.join(sorted(k.strip().lower() for k in keywords))}"
+
+
+def analyze(text: str, topic: str, keywords: list[str], bias_label: str, sentences: list[str] = None) -> dict:
     """
-    Generated Knowledge → CoT 4단계 (Prompt Merging) → 점수 계산
-    Model Tiering: 배경 지식=gpt-4o-mini / CoT 분석=gpt-4o
+    Generated Knowledge → CoT 4단계 (Prompt Merging) → 문장 하이라이팅 → 점수 계산
+    Model Tiering: 배경 지식·하이라이팅=gpt-4o-mini / CoT 분석=gpt-4o
+    Topic-based Caching: 동일 이슈 재요청 시 GPT 호출 없이 캐시 재사용
     """
-    background = _generate_background(topic, keywords)
+    topic_key = _make_topic_key(topic, keywords)
+    background = get_background(topic_key)
+    if background is None:
+        background = _generate_background(topic, keywords)
+        set_background(topic_key, background)
+
     cot = _run_cot_analysis(text, background)
+    highlighted = _run_highlight_analysis(sentences or [], cot)
     scores = _compute_scores(cot, bias_label)
-    return {"background": background, **scores}
+    return {"background": background, "highlighted_sentences": highlighted, **scores}
