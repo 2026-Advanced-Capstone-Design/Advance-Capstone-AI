@@ -90,7 +90,6 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
             # 혼합 방식: Google Fact Check 결과 우선, 없으면 CoT citation 반전값 사용
             "fact_ratio": external_fact_ratio if external_fact_ratio is not None else analysis.get("fact_ratio", 0.5),
             "fact_ratio_source": "google" if external_fact_ratio is not None else "cot",
-            "factcheck_results": factcheck_result.get("results", []),
             "source_balance": analysis.get("source_balance", 0.5),
             "omission_neutrality": analysis.get("omission_neutrality", 0.5),
             "bias_score": analysis.get("bias_score", 0.5),
