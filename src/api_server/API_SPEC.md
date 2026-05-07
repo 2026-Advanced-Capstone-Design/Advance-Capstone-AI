@@ -33,39 +33,39 @@ POST http://localhost:8000/analyze/comments
 
 ```json
 {
-  "video_title": "영상 제목",
-  "video_comment_count": "12345",
+  "videoTitle": "영상 제목",
+  "videoCommentCount": "12345",
   "total": 98,
   "positive": 40,
   "negative": 20,
   "neutral": 38,
-  "positive_pct": 40.8,
-  "negative_pct": 20.4,
-  "neutral_pct": 38.8,
-  "bot_count": 5,
-  "bot_pct": 5.1,
-  "positive_summary": "영상 내용에 공감하거나 취재 방향을 지지하는 댓글이 다수 포함됩니다.",
-  "negative_summary": "편파보도 및 언론 불신을 표현하는 비판 댓글이 주를 이룹니다.",
-  "neutral_summary": "사실만 간략히 언급하거나 추가 정보를 묻는 댓글이 포함됩니다.",
-  "special_notes": "동일 문구 반복 댓글 3건 봇 의심",
+  "positivePct": 40.8,
+  "negativePct": 20.4,
+  "neutralPct": 38.8,
+  "botCount": 5,
+  "botPct": 5.1,
+  "positiveSummary": "영상 내용에 공감하거나 취재 방향을 지지하는 댓글이 다수 포함됩니다.",
+  "negativeSummary": "편파보도 및 언론 불신을 표현하는 비판 댓글이 주를 이룹니다.",
+  "neutralSummary": "사실만 간략히 언급하거나 추가 정보를 묻는 댓글이 포함됩니다.",
+  "specialNotes": "동일 문구 반복 댓글 3건 봇 의심",
   "comments": [
     {
       "text": "댓글 내용",
       "likes": 123,
       "sentiment": "긍정",
-      "sentiment_score": 0.87,
-      "bot_score": 10,
-      "is_bot": false,
-      "bot_reasons": []
+      "sentimentScore": 0.87,
+      "botScore": 10,
+      "isBot": false,
+      "botReasons": []
     },
     {
       "text": "반드시 촉구해야 합니다. 올바른 방향으로",
       "likes": 0,
       "sentiment": "중립",
-      "sentiment_score": 0.71,
-      "bot_score": 75,
-      "is_bot": true,
-      "bot_reasons": ["선동 키워드", "딱딱한 문체"]
+      "sentimentScore": 0.71,
+      "botScore": 75,
+      "isBot": true,
+      "botReasons": ["선동 키워드", "딱딱한 문체"]
     }
   ]
 }
@@ -79,17 +79,20 @@ POST http://localhost:8000/analyze/comments
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| video_title | string | 유튜브 영상 제목 (POST /analyze/comments 사용 시 "직접 입력") |
-| video_comment_count | string | 영상의 전체 댓글 수 |
+| videoTitle | string | 유튜브 영상 제목 (POST /analyze/comments 사용 시 "직접 입력") |
+| channelName | string | 채널명 |
+| viewCount | int | 영상 조회수 |
+| publishedAt | string | 영상 게시일 (YYYY-MM-DD) |
+| videoCommentCount | string | 영상의 전체 댓글 수 |
 | total | int | 실제 분석된 댓글 수 (최대 100) |
 | positive / negative / neutral | int | 긍정 / 부정 / 중립 댓글 수 |
-| positive_pct / negative_pct / neutral_pct | float | 각 비율 (%) |
-| bot_count | int | 봇으로 판정된 댓글 수 |
-| bot_pct | float | 봇 비율 (%) |
-| positive_summary | string | 긍정 댓글 여론 요약 (GPT 생성) |
-| negative_summary | string | 부정 댓글 여론 요약 (GPT 생성) |
-| neutral_summary | string | 중립 댓글 여론 요약 (GPT 생성) |
-| special_notes | string | 봇 의심·선동 패턴 등 특이사항 (없으면 "없음") |
+| positivePct / negativePct / neutralPct | float | 각 비율 (%) |
+| botCount | int | 봇으로 판정된 댓글 수 |
+| botPct | float | 봇 비율 (%) |
+| positiveSummary | string | 긍정 댓글 여론 요약 (GPT 생성) |
+| negativeSummary | string | 부정 댓글 여론 요약 (GPT 생성) |
+| neutralSummary | string | 중립 댓글 여론 요약 (GPT 생성) |
+| specialNotes | string | 봇 의심·선동 패턴 등 특이사항 (없으면 "없음") |
 
 ### comments 배열 각 항목
 
@@ -97,11 +100,13 @@ POST http://localhost:8000/analyze/comments
 |------|------|------|
 | text | string | 댓글 원문 |
 | likes | int | 댓글 좋아요 수 |
+| authorName | string | 댓글 작성자 이름 |
+| authorId | string | 댓글 작성자 채널 ID |
 | sentiment | string | 긍정 / 부정 / 중립 |
-| sentiment_score | float | 감정 신뢰도 (0.0 ~ 1.0) |
-| bot_score | int | 봇 의심 점수 (0 ~ 100, 50 이상이면 봇 판정) |
-| is_bot | boolean | true = 봇 판정 (bot_score >= 50) |
-| bot_reasons | string[] | 봇 판정 근거 (없으면 빈 배열) |
+| sentimentScore | float | 감정 신뢰도 (0.0 ~ 1.0) |
+| botScore | int | 봇 의심 점수 (0 ~ 100, 50 이상이면 봇 판정) |
+| isBot | boolean | true = 봇 판정 (botScore >= 50) |
+| botReasons | string[] | 봇 판정 근거 (없으면 빈 배열) |
 
 ### bot_reasons 가능한 값
 

@@ -37,39 +37,39 @@ BATCH_SIZE = 25  # GPT 병렬 호출당 댓글 수
 class CommentItem(BaseModel):
     text: str
     likes: Optional[int] = 0
-    author_name: Optional[str] = None
-    author_id: Optional[str] = None
+    authorName: Optional[str] = None
+    authorId: Optional[str] = None
 
 class SentimentResult(BaseModel):
     text: str
     likes: Optional[int] = 0
-    author_name: Optional[str] = None
-    author_id: Optional[str] = None
+    authorName: Optional[str] = None
+    authorId: Optional[str] = None
     sentiment: str
-    sentiment_score: float
-    bot_score: int
-    is_bot: bool
-    bot_reasons: List[str]
+    sentimentScore: float
+    botScore: int
+    isBot: bool
+    botReasons: List[str]
 
 class YoutubeResult(BaseModel):
-    video_title: str
-    channel_name: Optional[str] = None
-    view_count: Optional[int] = None
-    published_at: Optional[str] = None
-    video_comment_count: str
+    videoTitle: str
+    channelName: Optional[str] = None
+    viewCount: Optional[int] = None
+    publishedAt: Optional[str] = None
+    videoCommentCount: str
     total: int
     positive: int
     negative: int
     neutral: int
-    positive_pct: float
-    negative_pct: float
-    neutral_pct: float
-    bot_count: int
-    bot_pct: float
-    positive_summary: str
-    negative_summary: str
-    neutral_summary: str
-    special_notes: str
+    positivePct: float
+    negativePct: float
+    neutralPct: float
+    botCount: int
+    botPct: float
+    positiveSummary: str
+    negativeSummary: str
+    neutralSummary: str
+    specialNotes: str
     comments: List[SentimentResult]
 
 # ===== 감정분류 + 봇탐지 통합 프롬프트 =====
@@ -418,13 +418,13 @@ async def _analyze_comments(comments: List[CommentItem]):
         results.append(SentimentResult(
             text=comment.text,
             likes=comment.likes,
-            author_name=comment.author_name,
-            author_id=comment.author_id,
+            authorName=comment.authorName,
+            authorId=comment.authorId,
             sentiment=label,
-            sentiment_score=score,
-            bot_score=bot_score,
-            is_bot=is_bot,
-            bot_reasons=reasons,
+            sentimentScore=score,
+            botScore=bot_score,
+            isBot=is_bot,
+            botReasons=reasons,
         ))
 
     return results, positive, negative, neutral, bot_count, len(results), summary["positive_summary"], summary["negative_summary"], summary["neutral_summary"], summary["special_notes"]
@@ -464,8 +464,8 @@ def _fetch_youtube_comments(video_id: str):
             comments.append(CommentItem(
                 text=text,
                 likes=snippet["likeCount"],
-                author_name=snippet.get("authorDisplayName"),
-                author_id=author_channel.get("value") if author_channel else None,
+                authorName=snippet.get("authorDisplayName"),
+                authorId=author_channel.get("value") if author_channel else None,
             ))
 
     return video_title, channel_name, view_count, published_at, comment_count_str, comments
@@ -489,14 +489,14 @@ async def _stream_analysis(
 
     # 메타 정보 즉시 전송
     yield _sse("meta", {
-        "video_title": video_title,
-        "channel_name": channel_name,
-        "view_count": view_count,
-        "published_at": published_at,
-        "video_comment_count": video_comment_count,
+        "videoTitle": video_title,
+        "channelName": channel_name,
+        "viewCount": view_count,
+        "publishedAt": published_at,
+        "videoCommentCount": video_comment_count,
         "total": total,
-        "batch_size": BATCH_SIZE,
-        "batch_count": (total + BATCH_SIZE - 1) // BATCH_SIZE,
+        "batchSize": BATCH_SIZE,
+        "batchCount": (total + BATCH_SIZE - 1) // BATCH_SIZE,
     })
 
     # TF-IDF (빠름, 동기)
@@ -538,19 +538,19 @@ async def _stream_analysis(
                     "index": global_i,
                     "text": comment.text,
                     "likes": comment.likes,
-                    "author_name": comment.author_name,
-                    "author_id": comment.author_id,
+                    "authorName": comment.authorName,
+                    "authorId": comment.authorId,
                     "sentiment": label,
-                    "sentiment_score": score,
-                    "bot_score": bot_score,
-                    "is_bot": is_bot,
-                    "bot_reasons": reasons,
+                    "sentimentScore": score,
+                    "botScore": bot_score,
+                    "isBot": is_bot,
+                    "botReasons": reasons,
                 })
 
             completed_batches += 1
             yield _sse("progress", {
-                "completed_batches": completed_batches,
-                "total_batches": len(batches),
+                "completedBatches": completed_batches,
+                "totalBatches": len(batches),
                 "processed": min(offset + BATCH_SIZE, total),
                 "total": total,
             })
@@ -564,21 +564,21 @@ async def _stream_analysis(
     bot_count = sum(1 for a in all_analysis if a[3])
 
     yield _sse("summary", {
-        "positive_summary": summary["positive_summary"],
-        "negative_summary": summary["negative_summary"],
-        "neutral_summary":  summary["neutral_summary"],
-        "special_notes":    summary["special_notes"],
+        "positiveSummary": summary["positive_summary"],
+        "negativeSummary": summary["negative_summary"],
+        "neutralSummary":  summary["neutral_summary"],
+        "specialNotes":    summary["special_notes"],
     })
     yield _sse("stats", {
         "total": total,
         "positive": positive,
         "negative": negative,
         "neutral": neutral,
-        "positive_pct": round(positive / total * 100, 1),
-        "negative_pct": round(negative / total * 100, 1),
-        "neutral_pct":  round(neutral  / total * 100, 1),
-        "bot_count": bot_count,
-        "bot_pct": round(bot_count / total * 100, 1),
+        "positivePct": round(positive / total * 100, 1),
+        "negativePct": round(negative / total * 100, 1),
+        "neutralPct":  round(neutral  / total * 100, 1),
+        "botCount": bot_count,
+        "botPct": round(bot_count / total * 100, 1),
     })
     yield _sse("done", {})
 
@@ -613,24 +613,24 @@ async def analyze_youtube_by_id(video_id: str):
     try:
         results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
         return YoutubeResult(
-            video_title=video_title,
-            channel_name=channel_name,
-            view_count=view_count,
-            published_at=published_at,
-            video_comment_count=comment_count_str,
+            videoTitle=video_title,
+            channelName=channel_name,
+            viewCount=view_count,
+            publishedAt=published_at,
+            videoCommentCount=comment_count_str,
             total=total,
             positive=positive,
             negative=negative,
             neutral=neutral,
-            positive_pct=round(positive / total * 100, 1),
-            negative_pct=round(negative / total * 100, 1),
-            neutral_pct=round(neutral  / total * 100, 1),
-            bot_count=bot_count,
-            bot_pct=round(bot_count / total * 100, 1),
-            positive_summary=pos_sum,
-            negative_summary=neg_sum,
-            neutral_summary=neu_sum,
-            special_notes=notes,
+            positivePct=round(positive / total * 100, 1),
+            negativePct=round(negative / total * 100, 1),
+            neutralPct=round(neutral  / total * 100, 1),
+            botCount=bot_count,
+            botPct=round(bot_count / total * 100, 1),
+            positiveSummary=pos_sum,
+            negativeSummary=neg_sum,
+            neutralSummary=neu_sum,
+            specialNotes=notes,
             comments=results,
         )
     except Exception as e:
@@ -644,21 +644,21 @@ async def analyze_comments_direct(comments: List[CommentItem]):
     try:
         results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
         return YoutubeResult(
-            video_title="직접 입력",
-            video_comment_count=str(total),
+            videoTitle="직접 입력",
+            videoCommentCount=str(total),
             total=total,
             positive=positive,
             negative=negative,
             neutral=neutral,
-            positive_pct=round(positive / total * 100, 1),
-            negative_pct=round(negative / total * 100, 1),
-            neutral_pct=round(neutral  / total * 100, 1),
-            bot_count=bot_count,
-            bot_pct=round(bot_count / total * 100, 1),
-            positive_summary=pos_sum,
-            negative_summary=neg_sum,
-            neutral_summary=neu_sum,
-            special_notes=notes,
+            positivePct=round(positive / total * 100, 1),
+            negativePct=round(negative / total * 100, 1),
+            neutralPct=round(neutral  / total * 100, 1),
+            botCount=bot_count,
+            botPct=round(bot_count / total * 100, 1),
+            positiveSummary=pos_sum,
+            negativeSummary=neg_sum,
+            neutralSummary=neu_sum,
+            specialNotes=notes,
             comments=results,
         )
     except Exception as e:
