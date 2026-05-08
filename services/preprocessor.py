@@ -10,9 +10,6 @@ _MULTI_SPACE = re.compile(r"\s+")
 _SPECIAL = re.compile(r"[^가-힣a-zA-Z0-9\s.,!?%()·\-\"']")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[가-힣A-Z\"])")
 
-# 출처 표기 추출 패턴 — 제거하지 않고 별도 수집
-_SOURCE = re.compile(r"(사진|자료|제공|출처|이미지)\s*=\s*[^\n,./]{1,30}")
-
 # 문장 레벨 광고성 키워드 — 해당 키워드가 포함된 문장 전체를 제거
 _AD_KEYWORDS = re.compile(
     r"구독\s*(하기|해주세요|바랍니다|신청|버튼|하면)"
@@ -53,11 +50,6 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def extract_sources(text: str) -> list[str]:
-    """출처 표기(사진=, 제공= 등)를 원문에서 추출"""
-    return [m.group().strip() for m in _SOURCE.finditer(text)]
-
-
 def split_sentences(text: str) -> list[str]:
     parts = _SENTENCE_SPLIT.split(text)
     return [s.strip() for s in parts if len(s.strip()) > 10]
@@ -74,11 +66,9 @@ def preprocess(raw: str, is_html: bool = False) -> dict:
     반환:
       cleaned   - 특수문자·저작권 등이 제거된 본문 전체
       sentences - 광고성 문장이 제거된 본문 문장 리스트
-      sources   - 기사 내 출처 표기 (사진=, 제공= 등) 리스트
     """
     text = clean_html(raw) if is_html else raw
-    sources = extract_sources(text)        # 정제 전 원문에서 출처 추출
     cleaned = clean_text(text)
     all_sentences = split_sentences(cleaned)
     sentences = filter_ad_sentences(all_sentences)
-    return {"cleaned": cleaned, "sentences": sentences, "sources": sources}
+    return {"cleaned": cleaned, "sentences": sentences}

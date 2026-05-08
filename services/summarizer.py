@@ -4,7 +4,6 @@ from config import OPENAI_API_KEY, GPT_MINI_MODEL
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Zero-shot + Constraint + Role shot 프롬프트
 _SYSTEM_PROMPT = """당신은 뉴스 기사를 분석하는 전문가입니다.
 주어진 기사를 읽고 아래 형식으로 정확하게 응답하세요.
 
@@ -16,11 +15,18 @@ _SYSTEM_PROMPT = """당신은 뉴스 기사를 분석하는 전문가입니다.
 
 [응답 형식]
 {
-  "one_line_summary": "기사 전체를 한 문장으로 요약 (30자 이내)",
+  "compressed_text": "원문의 약 50% 분량으로 압축한 본문 (최소 200자)",
   "key_facts": ["핵심 사실 1", "핵심 사실 2", "핵심 사실 3"],
   "keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"],
   "topic": "기사의 주요 이슈/주제 (예: 총선, 물가, 외교)"
-}"""
+}
+
+[compressed_text 작성 기준]
+- 중복되거나 반복되는 문장 제거
+- 이미지 캡션 (▲, 사진=, 제공= 등으로 시작하는 짧은 설명) 제거
+- 광고성/홍보성 문장 제거
+- 핵심 사실과 논지는 반드시 유지
+- 기사가 짧으면 200자 이상 유지"""
 
 _USER_PROMPT_TEMPLATE = """다음 뉴스 기사를 분석해주세요.
 
@@ -29,10 +35,6 @@ _USER_PROMPT_TEMPLATE = """다음 뉴스 기사를 분석해주세요.
 
 
 def summarize(text: str) -> dict:
-    """
-    Zero-shot + Constraint + Role 프롬프트로 기사 요약/키워드/주제를 생성합니다.
-    """
-    # 토큰 절약을 위해 본문 앞 3000자만 사용
     truncated = text[:5000] if len(text) > 5000 else text
 
     response = client.chat.completions.create(
@@ -42,7 +44,7 @@ def summarize(text: str) -> dict:
             {"role": "user", "content": _USER_PROMPT_TEMPLATE.format(text=truncated)},
         ],
         temperature=0.2,
-        max_tokens=512,
+        max_tokens=1500,
         response_format={"type": "json_object"},
     )
 

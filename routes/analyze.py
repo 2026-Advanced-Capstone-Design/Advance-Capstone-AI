@@ -50,11 +50,12 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
         preprocessed = preprocess(text, is_html=False)
         cleaned_text = preprocessed["cleaned"]
 
-        # Step 2: Zero-shot + Constraint 요약 / 키워드 생성
+        # Step 2: 압축 본문 / 키워드 생성
         summary = summarize(cleaned_text)
+        compressed_text = summary.get("compressed_text") or cleaned_text
 
         # Step 3: 섹션 분리 + 섹션별 편향 라벨링
-        label_result = label(cleaned_text)
+        label_result = label(compressed_text)
         bias_label = label_result.get("overall_label", "uncertain")
 
         # Step 3-1: Google Fact Check API 검증 (혼합 방식 — 결과 없으면 CoT fallback)
@@ -64,7 +65,7 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
 
         # Step 4: Generated Knowledge + CoT 편향 분석 (Prompt Merging + Model Tiering)
         analysis = run_analysis(
-            text=cleaned_text,
+            text=compressed_text,
             topic=summary.get("topic", ""),
             keywords=summary.get("keywords", []),
             bias_label=bias_label,
@@ -73,12 +74,11 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
 
         result = {
             "article_id": article_id,
-            "one_line_summary": summary.get("one_line_summary", ""),
+            "compressed_text": compressed_text,
             "key_facts": summary.get("key_facts", []),
             "keywords": summary.get("keywords", []),
             "topic": summary.get("topic", ""),
             "sentence_count": len(preprocessed["sentences"]),
-            "sources": preprocessed.get("sources", []),
             "sections": label_result.get("sections", []),
             "bias_label": bias_label,
             "bias_confidence": label_result.get("overall_confidence", 0.0),
