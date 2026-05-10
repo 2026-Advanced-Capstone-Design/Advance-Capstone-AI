@@ -19,24 +19,22 @@ _ANALYSIS_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
 [배경 지식]
 {background}
 
-[분석 4단계]
+[분석 3단계]
 1. 어휘 선택 (vocab): 감정적·편향적 단어 사용 여부
-2. 프레이밍 (framing): 특정 관점을 부각하거나 약화시키는 구조 여부
-3. 인용 편향 (citation): 인용 출처가 한쪽에 치우쳤는지 여부
-4. 정보 생략 (omission): 반대 관점의 중요 사실을 누락했는지 여부
+2. 사실 기반도 (fact_basis): 기사의 주장이 검증 가능한 데이터·통계·공식 출처에 근거하는지 여부. score는 사실 근거가 부족할수록 1.0에 가깝게 설정하세요.
+3. 정보 생략 (omission): 반대 관점의 중요 사실을 누락했는지 여부
 
 [제약 조건]
-- 각 단계별 score는 0.0(편향 없음)~1.0(강한 편향) 실수
+- 각 단계별 score는 0.0(문제 없음)~1.0(심각한 문제) 실수
 - bias_direction: "left" | "center" | "right"
 - spectrum_label: "진보" | "중립" | "보수"
 - 반드시 JSON만 출력하세요.
 
 [응답 형식]
 {{
-  "step1_vocab":    {{"score": 0.0, "reason": "..."}},
-  "step2_framing":  {{"score": 0.0, "reason": "..."}},
-  "step3_citation": {{"score": 0.0, "reason": "..."}},
-  "step4_omission": {{"score": 0.0, "reason": "..."}},
+  "step1_vocab":      {{"score": 0.0, "reason": "..."}},
+  "step2_fact_basis": {{"score": 0.0, "reason": "이 기사의 주장이 사실에 근거하는 정도와 그 이유를 서술하세요."}},
+  "step3_omission":   {{"score": 0.0, "reason": "..."}},
   "bias_direction": "center",
   "spectrum_label": "중립"
 }}"""
@@ -70,8 +68,8 @@ _HIGHLIGHT_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
 
 _HIGHLIGHT_USER = """[분석된 편향 근거]
 어휘 선택: {vocab_reason}
-프레이밍: {framing_reason}
-인용 편향: {citation_reason}
+사실 기반도: {fact_basis_reason}
+정보 생략: {omission_reason}
 
 [문장 목록]
 {sentences}"""
@@ -120,8 +118,8 @@ def _run_highlight_analysis(sentences: list[str], cot: dict) -> list[dict]:
 
     user = _HIGHLIGHT_USER.format(
         vocab_reason=cot.get("step1_vocab", {}).get("reason", ""),
-        framing_reason=cot.get("step2_framing", {}).get("reason", ""),
-        citation_reason=cot.get("step3_citation", {}).get("reason", ""),
+        fact_basis_reason=cot.get("step2_fact_basis", {}).get("reason", ""),
+        omission_reason=cot.get("step3_omission", {}).get("reason", ""),
         sentences=sentence_text,
     )
 
@@ -142,18 +140,16 @@ def _run_highlight_analysis(sentences: list[str], cot: dict) -> list[dict]:
 
 def _compute_scores(cot: dict, label: str) -> dict:
     """CoT 결과 → 4대 지표 + 종합 점수 계산 (각 25% 균등 가중치)"""
-    vocab    = cot.get("step1_vocab",    {}).get("score", 0.5)
-    framing  = cot.get("step2_framing",  {}).get("score", 0.5)
-    citation = cot.get("step3_citation", {}).get("score", 0.5)
-    omission = cot.get("step4_omission", {}).get("score", 0.5)
+    vocab      = cot.get("step1_vocab",      {}).get("score", 0.5)
+    fact_basis = cot.get("step2_fact_basis", {}).get("score", 0.5)
+    omission   = cot.get("step3_omission",   {}).get("score", 0.5)
 
-    # 각 편향 점수를 반전 → 4대 독립 지표 (높을수록 좋음)
-    emotion_neutrality  = round(1.0 - vocab,    3)  # 어휘 편향 없을수록 ↑
-    fact_ratio          = round(1.0 - citation, 3)  # 인용 편향 없을수록 ↑ (Google API로 대체 가능)
-    source_balance      = round(1.0 - framing,  3)  # 프레이밍 없을수록 ↑
-    omission_neutrality = round(1.0 - omission, 3)  # 정보 생략 없을수록 ↑
+    # 각 점수를 반전 → 3대 독립 지표 (높을수록 좋음)
+    emotion_neutrality  = round(1.0 - vocab,      3)
+    fact_ratio          = round(1.0 - fact_basis, 3)
+    omission_neutrality = round(1.0 - omission,   3)
 
-    bias_score = round((vocab + framing + citation + omission) / 4, 3)
+    bias_score = round((vocab + fact_basis + omission) / 3, 3)
     # total_score는 routes/analyze.py에서 섹션별 편향도 포함하여 최종 계산
 
     direction_map = {"progressive": "left", "conservative": "right"}
@@ -163,17 +159,14 @@ def _compute_scores(cot: dict, label: str) -> dict:
     spectrum_label = spectrum_map.get(label, "중립")
 
     return {
-        "emotion_neutrality":  emotion_neutrality,
-        "fact_ratio":          fact_ratio,
-        "source_balance":      source_balance,
-        "omission_neutrality": omission_neutrality,
-        "bias_score":          bias_score,
-        "bias_direction":      cot.get("bias_direction", bias_direction),
-        "spectrum_label":      cot.get("spectrum_label", spectrum_label),
-        "cot_vocab_reason":    cot.get("step1_vocab",    {}).get("reason", ""),
-        "cot_framing_reason":  cot.get("step2_framing",  {}).get("reason", ""),
-        "cot_citation_reason": cot.get("step3_citation", {}).get("reason", ""),
-        "cot_omission_reason": cot.get("step4_omission", {}).get("reason", ""),
+        "emotion_neutrality":    emotion_neutrality,
+        "fact_ratio":            fact_ratio,
+        "omission_neutrality":   omission_neutrality,
+        "bias_score":            bias_score,
+        "bias_direction":        cot.get("bias_direction", bias_direction),
+        "spectrum_label":        cot.get("spectrum_label", spectrum_label),
+        "cot_emotion_reason":    cot.get("step1_vocab",      {}).get("reason", ""),
+        "cot_fact_ratio_reason": cot.get("step2_fact_basis", {}).get("reason", ""),
     }
 
 

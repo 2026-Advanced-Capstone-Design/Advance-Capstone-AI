@@ -61,6 +61,7 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
         # Step 3-1: Google Fact Check API 검증 (혼합 방식 — 결과 없으면 CoT fallback)
         factcheck_result    = check_facts(summary.get("key_facts", []))
         external_fact_ratio = factcheck_result.get("fact_ratio")  # None이면 CoT 기반으로 대체
+        fact_check_results  = factcheck_result.get("results", [])
         section_bias_score  = _compute_section_bias_score(label_result.get("sections", []))
 
         # Step 4: Generated Knowledge + CoT 편향 분석 (Prompt Merging + Model Tiering)
@@ -87,10 +88,9 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
             "bias_direction": analysis.get("bias_direction", "center"),
             "spectrum_label": analysis.get("spectrum_label", "중립"),
             "emotion_neutrality": analysis.get("emotion_neutrality", 0.5),
-            # 혼합 방식: Google Fact Check 결과 우선, 없으면 CoT citation 반전값 사용
+            # 혼합 방식: Google Fact Check 결과 우선, 없으면 CoT fact_basis 반전값 사용
             "fact_ratio": external_fact_ratio if external_fact_ratio is not None else analysis.get("fact_ratio", 0.5),
             "fact_ratio_source": "google" if external_fact_ratio is not None else "cot",
-            "source_balance": analysis.get("source_balance", 0.5),
             "omission_neutrality": analysis.get("omission_neutrality", 0.5),
             "bias_score": analysis.get("bias_score", 0.5),
             # 총점 = (사실 기반도 + 감정 중립도 + 섹션별 편향도) / 3
@@ -101,10 +101,9 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
                 + section_bias_score
             ) / 3 * 100),
             "background": analysis.get("background", ""),
-            "cot_vocab_reason": analysis.get("cot_vocab_reason", ""),
-            "cot_framing_reason": analysis.get("cot_framing_reason", ""),
-            "cot_citation_reason": analysis.get("cot_citation_reason", ""),
-            "cot_omission_reason": analysis.get("cot_omission_reason", ""),
+            "cot_emotion_reason":    analysis.get("cot_emotion_reason", ""),
+            "cot_fact_ratio_reason": analysis.get("cot_fact_ratio_reason", ""),
+            "fact_check_results":    fact_check_results,
         }
 
         update_task(task_id, TaskStatus.DONE, result=result)
