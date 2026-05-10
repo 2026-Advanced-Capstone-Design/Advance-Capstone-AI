@@ -19,24 +19,20 @@ _ANALYSIS_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
 [배경 지식]
 {background}
 
-[분석 3단계]
+[분석 2단계]
 1. 어휘 선택 (vocab): 감정적·편향적 단어 사용 여부
 2. 사실 기반도 (fact_basis): 기사의 주장이 검증 가능한 데이터·통계·공식 출처에 근거하는지 여부. score는 사실 근거가 부족할수록 1.0에 가깝게 설정하세요.
-3. 정보 생략 (omission): 반대 관점의 중요 사실을 누락했는지 여부
 
 [제약 조건]
 - 각 단계별 score는 0.0(문제 없음)~1.0(심각한 문제) 실수
 - bias_direction: "left" | "center" | "right"
-- spectrum_label: "진보" | "중립" | "보수"
 - 반드시 JSON만 출력하세요.
 
 [응답 형식]
 {{
   "step1_vocab":      {{"score": 0.0, "reason": "..."}},
   "step2_fact_basis": {{"score": 0.0, "reason": "이 기사의 주장이 사실에 근거하는 정도와 그 이유를 서술하세요."}},
-  "step3_omission":   {{"score": 0.0, "reason": "..."}},
-  "bias_direction": "center",
-  "spectrum_label": "중립"
+  "bias_direction": "center"
 }}"""
 
 _ANALYSIS_USER = "[기사]\n{text}"
@@ -69,7 +65,6 @@ _HIGHLIGHT_SYSTEM = """당신은 뉴스 편향 분석 전문가입니다.
 _HIGHLIGHT_USER = """[분석된 편향 근거]
 어휘 선택: {vocab_reason}
 사실 기반도: {fact_basis_reason}
-정보 생략: {omission_reason}
 
 [문장 목록]
 {sentences}"""
@@ -119,7 +114,6 @@ def _run_highlight_analysis(sentences: list[str], cot: dict) -> list[dict]:
     user = _HIGHLIGHT_USER.format(
         vocab_reason=cot.get("step1_vocab", {}).get("reason", ""),
         fact_basis_reason=cot.get("step2_fact_basis", {}).get("reason", ""),
-        omission_reason=cot.get("step3_omission", {}).get("reason", ""),
         sentences=sentence_text,
     )
 
@@ -139,32 +133,25 @@ def _run_highlight_analysis(sentences: list[str], cot: dict) -> list[dict]:
 
 
 def _compute_scores(cot: dict, label: str) -> dict:
-    """CoT 결과 → 4대 지표 + 종합 점수 계산 (각 25% 균등 가중치)"""
+    """CoT 결과 → 2대 지표 + 종합 점수 계산"""
     vocab      = cot.get("step1_vocab",      {}).get("score", 0.5)
     fact_basis = cot.get("step2_fact_basis", {}).get("score", 0.5)
-    omission   = cot.get("step3_omission",   {}).get("score", 0.5)
 
-    # 각 점수를 반전 → 3대 독립 지표 (높을수록 좋음)
-    emotion_neutrality  = round(1.0 - vocab,      3)
-    fact_ratio          = round(1.0 - fact_basis, 3)
-    omission_neutrality = round(1.0 - omission,   3)
+    # 각 점수를 반전 → 2대 독립 지표 (높을수록 좋음)
+    emotion_neutrality = round(1.0 - vocab,      3)
+    fact_ratio         = round(1.0 - fact_basis, 3)
 
-    bias_score = round((vocab + fact_basis + omission) / 3, 3)
+    bias_score = round((vocab + fact_basis) / 2, 3)
     # total_score는 routes/analyze.py에서 섹션별 편향도 포함하여 최종 계산
 
     direction_map = {"progressive": "left", "conservative": "right"}
     bias_direction = direction_map.get(label, "center")
 
-    spectrum_map = {"progressive": "진보", "conservative": "보수"}
-    spectrum_label = spectrum_map.get(label, "중립")
-
     return {
         "emotion_neutrality":    emotion_neutrality,
         "fact_ratio":            fact_ratio,
-        "omission_neutrality":   omission_neutrality,
         "bias_score":            bias_score,
         "bias_direction":        cot.get("bias_direction", bias_direction),
-        "spectrum_label":        cot.get("spectrum_label", spectrum_label),
         "cot_emotion_reason":    cot.get("step1_vocab",      {}).get("reason", ""),
         "cot_fact_ratio_reason": cot.get("step2_fact_basis", {}).get("reason", ""),
     }

@@ -86,12 +86,10 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
             "bias_reason": label_result.get("overall_reason", ""),
             "highlighted_sentences": analysis.get("highlighted_sentences", []),
             "bias_direction": analysis.get("bias_direction", "center"),
-            "spectrum_label": analysis.get("spectrum_label", "중립"),
             "emotion_neutrality": analysis.get("emotion_neutrality", 0.5),
             # 혼합 방식: Google Fact Check 결과 우선, 없으면 CoT fact_basis 반전값 사용
             "fact_ratio": external_fact_ratio if external_fact_ratio is not None else analysis.get("fact_ratio", 0.5),
             "fact_ratio_source": "google" if external_fact_ratio is not None else "cot",
-            "omission_neutrality": analysis.get("omission_neutrality", 0.5),
             "bias_score": analysis.get("bias_score", 0.5),
             # 총점 = (사실 기반도 + 감정 중립도 + 섹션별 편향도) / 3
             "section_bias_score": section_bias_score,
