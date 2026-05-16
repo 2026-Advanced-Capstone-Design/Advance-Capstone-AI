@@ -2,7 +2,9 @@ name: Deploy AI Engine
 
 on:
   push:
-    branches: [develop]
+    branches:
+      - feature/news-analysis-AI
+      - feature/news-youtube-opinion-analysis
 
 jobs:
   build-and-deploy:
