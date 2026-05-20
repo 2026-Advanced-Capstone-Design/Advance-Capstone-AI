@@ -17,8 +17,13 @@ _RATING_MAP = {
 }
 
 _SYSTEM = """당신은 팩트체크 전문가입니다.
-주어진 주장 목록과 Google Fact Check 검증 결과를 바탕으로,
-기사 전체의 사실성 점수와 근거를 판단하세요.
+주어진 주장 목록을 분석하여 기사 전체의 사실성 점수와 근거를 판단하세요.
+
+[판단 기준]
+- Google Fact Check 검증 결과가 있으면 해당 결과를 우선 반영하세요.
+- Google 결과가 없으면 주장 자체의 구체성, 검증 가능성, 출처 명시 여부를 기준으로 판단하세요.
+  예) 날짜·수치·기관명 등 구체적 사실이 포함된 주장 → 높은 점수
+      모호하거나 과장된 주장, 출처 불명 → 낮은 점수
 
 [응답 형식]
 {{
@@ -126,7 +131,9 @@ def _gpt_check(key_facts: list[str], google_results: list[dict]) -> dict:
         if google_results:
             scores = [r["score"] for r in google_results]
             google_ratio = round(sum(scores) / len(scores), 3)
-        return {"fact_ratio": google_ratio, "fact_check_reason": ""}
+        reason = "팩트체크 API 호출에 실패하여 자동 검증이 불가능했습니다." if not google_results \
+            else f"Google Fact Check 결과 {len(google_results)}건을 바탕으로 산출된 점수입니다."
+        return {"fact_ratio": google_ratio, "fact_check_reason": reason}
 
 
 def check_facts(key_facts: list[str]) -> dict:
