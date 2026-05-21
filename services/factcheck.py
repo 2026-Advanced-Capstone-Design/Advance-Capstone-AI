@@ -1,7 +1,10 @@
 import json
+import logging
 import requests
 from openai import OpenAI
 from config import GOOGLE_FACTCHECK_API_KEY, OPENAI_API_KEY, GPT_MINI_MODEL
+
+logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -25,7 +28,7 @@ _SYSTEM = """당신은 팩트체크 전문가입니다.
   예) 날짜·수치·기관명 등 구체적 사실이 포함된 주장 → 높은 점수
       모호하거나 과장된 주장, 출처 불명 → 낮은 점수
 
-[응답 형식]
+[응답 형식 — 반드시 JSON만 출력]
 {{
   "fact_ratio": 0.0~1.0,
   "fact_check_reason": "전체 주장들의 사실성에 대한 종합 근거를 2~3문장으로 설명"
@@ -107,7 +110,7 @@ def _format_google_context(google_results: list[dict]) -> str:
 
 
 def _gpt_check(key_facts: list[str], google_results: list[dict]) -> dict:
-    """Google 결과를 풍부한 컨텍스트로 제공해 GPT가 종합 판단"""
+    """Google 결과를 컨텍스트로 제공해 GPT가 종합 판단. Google 결과 없으면 GPT 단독 분석."""
     facts_text = "\n".join(f"- {f}" for f in key_facts[:3])
     google_context = _format_google_context(google_results)
 
@@ -126,14 +129,15 @@ def _gpt_check(key_facts: list[str], google_results: list[dict]) -> dict:
             response_format={"type": "json_object"},
         )
         return json.loads(response.choices[0].message.content)
-    except Exception:
-        google_ratio = None
+    except Exception as e:
+        logger.error("[factcheck] GPT 호출 실패: %s", e, exc_info=True)
         if google_results:
             scores = [r["score"] for r in google_results]
-            google_ratio = round(sum(scores) / len(scores), 3)
-        reason = "팩트체크 API 호출에 실패하여 자동 검증이 불가능했습니다." if not google_results \
-            else f"Google Fact Check 결과 {len(google_results)}건을 바탕으로 산출된 점수입니다."
-        return {"fact_ratio": google_ratio, "fact_check_reason": reason}
+            return {
+                "fact_ratio": round(sum(scores) / len(scores), 3),
+                "fact_check_reason": f"Google Fact Check 결과 {len(google_results)}건을 바탕으로 산출된 점수입니다.",
+            }
+        return {"fact_ratio": None, "fact_check_reason": None}
 
 
 def check_facts(key_facts: list[str]) -> dict:

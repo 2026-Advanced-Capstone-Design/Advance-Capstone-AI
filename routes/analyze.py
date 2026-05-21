@@ -13,7 +13,7 @@ from config import SPRING_CALLBACK_URL
 MOCK_MODE = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
 MOCK_RESULT = {
-    "compressed_text": "mock 분석 결과입니다.",
+    "key_facts": ["mock 핵심 사실 1입니다.", "mock 핵심 사실 2입니다.", "mock 핵심 사실 3입니다."],
     "keywords": ["테스트", "부하", "성능"],
     "topic": "부하 테스트",
     "bias_label": "neutral",
@@ -23,7 +23,6 @@ MOCK_RESULT = {
     "highlighted_sentences": [],
     "emotion_neutrality": 0.8,
     "fact_ratio": 0.7,
-    "fact_ratio_source": 0.7,
     "bias_score": 0.2,
     "total_score": 80,
     "cot_emotion_reason": "mock",
@@ -85,7 +84,7 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
 
         result = {
             "article_id": article_id,
-            "compressed_text": summary.get("compressed_text", ""),
+            "key_facts": summary.get("key_facts", []),
             "keywords": summary.get("keywords", []),
             "topic": summary.get("topic", ""),
             "bias_label": bias_label,
@@ -95,7 +94,6 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
             "highlighted_sentences": analysis.get("highlighted_sentences", []),
             "emotion_neutrality": analysis.get("emotion_neutrality", 0.5),
             "fact_ratio": fact_ratio,
-            "fact_ratio_source": fact_ratio_source,
             "bias_score": bias_score,
             "total_score": total_score,
             "cot_emotion_reason": analysis.get("cot_emotion_reason", ""),
