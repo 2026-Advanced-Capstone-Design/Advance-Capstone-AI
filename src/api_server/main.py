@@ -1,8 +1,6 @@
 import asyncio
-import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -10,7 +8,8 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import AsyncGenerator, List, Optional, Tuple
+from typing import List, Optional, Tuple
+from dataclasses import dataclass
 import os
 
 
@@ -131,6 +130,7 @@ ANALYZE_SYSTEM_PROMPT = """당신은 한국어 뉴스·정치·경제·예능 �
 1. 인터넷 슬랭 충격/경악 — 부정적 맥락에서 사용 시
    - "ㄷㄷ", "ㄷㄷㄷ", "덜덜" + (세금낭비/비리/재난 등)
    - 예: "140조 ㄷㄷㄷ 그것도 증액" → 부정
+   - 단, "ㄷㄷ" 단독 (다른 맥락 없이 이 표현만 있는 경우) → 중립
 2. 신조어·합성어 비판
    - 인물+히틀러/나치, 정당+비하어 합성
    - 예: "또람프틀러", "틀딱", "꼰대정치" → 부정
@@ -342,12 +342,16 @@ def _parse_summary(text: str) -> dict:
     }
 
 
-async def summarize_comments_async(texts: List[str], analysis: List[Tuple]) -> dict:
+async def summarize_comments_async(
+    texts: List[str],
+    analysis: List[Tuple],
+    positive: int,
+    negative: int,
+    neutral: int,
+    bot_count: int,
+) -> dict:
     total = len(analysis)
-    neg       = sum(1 for a in analysis if a[0] == "부정")
-    pos       = sum(1 for a in analysis if a[0] == "긍정")
-    neu       = sum(1 for a in analysis if a[0] == "중립")
-    bot_count = sum(1 for a in analysis if a[3])
+    pos, neg, neu = positive, negative, neutral
 
     samples = {"부정": [], "긍정": [], "중립": []}
     for text, item in zip(texts, analysis):
@@ -389,8 +393,22 @@ async def summarize_comments_async(texts: List[str], analysis: List[Tuple]) -> d
         }
 
 
+@dataclass
+class AnalysisOutput:
+    results: List[SentimentResult]
+    positive: int
+    negative: int
+    neutral: int
+    bot_count: int
+    total: int
+    positive_summary: str
+    negative_summary: str
+    neutral_summary: str
+    special_notes: str
+
+
 # ===== 핵심 분석 로직 (비동기) =====
-async def _analyze_comments(comments: List[CommentItem]):
+async def _analyze_comments(comments: List[CommentItem]) -> AnalysisOutput:
     texts = [c.text for c in comments]
 
     try:
@@ -400,9 +418,7 @@ async def _analyze_comments(comments: List[CommentItem]):
     except Exception:
         sim_matrix = None
 
-    # 병렬 배치 GPT 호출 + 요약 동시 시작
     analysis = await analyze_all_parallel(texts, sim_matrix)
-    summary  = await summarize_comments_async(texts, analysis)
 
     results = []
     positive = negative = neutral = bot_count = 0
@@ -427,7 +443,20 @@ async def _analyze_comments(comments: List[CommentItem]):
             botReasons=reasons,
         ))
 
-    return results, positive, negative, neutral, bot_count, len(results), summary["positive_summary"], summary["negative_summary"], summary["neutral_summary"], summary["special_notes"]
+    summary = await summarize_comments_async(texts, analysis, positive, negative, neutral, bot_count)
+
+    return AnalysisOutput(
+        results=results,
+        positive=positive,
+        negative=negative,
+        neutral=neutral,
+        bot_count=bot_count,
+        total=len(results),
+        positive_summary=summary["positive_summary"],
+        negative_summary=summary["negative_summary"],
+        neutral_summary=summary["neutral_summary"],
+        special_notes=summary["special_notes"],
+    )
 
 
 def _fetch_youtube_comments(video_id: str):
@@ -471,126 +500,12 @@ def _fetch_youtube_comments(video_id: str):
     return video_title, channel_name, view_count, published_at, comment_count_str, comments
 
 
-# ===== SSE 헬퍼 =====
-def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-async def _stream_analysis(
-    comments: List[CommentItem],
-    video_title: str,
-    video_comment_count: str,
-    channel_name: Optional[str] = None,
-    view_count: Optional[int] = None,
-    published_at: Optional[str] = None,
-) -> AsyncGenerator[str, None]:
-    texts = [c.text for c in comments]
-    total = len(texts)
-
-    # 메타 정보 즉시 전송
-    yield _sse("meta", {
-        "videoTitle": video_title,
-        "channelName": channel_name,
-        "viewCount": view_count,
-        "publishedAt": published_at,
-        "videoCommentCount": video_comment_count,
-        "total": total,
-        "batchSize": BATCH_SIZE,
-        "batchCount": (total + BATCH_SIZE - 1) // BATCH_SIZE,
-    })
-
-    # TF-IDF (빠름, 동기)
-    try:
-        vectorizer = TfidfVectorizer()
-        tfidf = vectorizer.fit_transform(texts)
-        sim_matrix = cosine_similarity(tfidf)
-    except Exception:
-        sim_matrix = None
-
-    # 배치 분할
-    batches = [texts[i:i+BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
-    offsets = list(range(0, total, BATCH_SIZE))
-
-    # 각 배치를 태스크로 만들어 완료 순서대로 스트리밍
-    tasks = {
-        asyncio.ensure_future(_call_gpt_batch(batch)): (offset, batch)
-        for batch, offset in zip(batches, offsets)
-    }
-
-    all_analysis: List[Optional[Tuple]] = [None] * total
-    completed_batches = 0
-
-    pending = set(tasks.keys())
-    while pending:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for fut in done:
-            offset, batch = tasks[fut]
-            raw_results = fut.result()
-            adjusted = _apply_tfidf(raw_results, texts, sim_matrix, global_offset=offset)
-
-            for local_i, result in enumerate(adjusted):
-                global_i = offset + local_i
-                all_analysis[global_i] = result
-                comment = comments[global_i]
-                label, score, bot_score, is_bot, reasons = result
-
-                yield _sse("comment", {
-                    "index": global_i,
-                    "text": comment.text,
-                    "likes": comment.likes,
-                    "authorName": comment.authorName,
-                    "authorId": comment.authorId,
-                    "sentiment": label,
-                    "sentimentScore": score,
-                    "botScore": bot_score,
-                    "isBot": is_bot,
-                    "botReasons": reasons,
-                })
-
-            completed_batches += 1
-            yield _sse("progress", {
-                "completedBatches": completed_batches,
-                "totalBatches": len(batches),
-                "processed": min(offset + BATCH_SIZE, total),
-                "total": total,
-            })
-
-    # 모든 배치 완료 → 요약 생성
-    summary = await summarize_comments_async(texts, all_analysis)
-
-    positive  = sum(1 for a in all_analysis if a[0] == "긍정")
-    negative  = sum(1 for a in all_analysis if a[0] == "부정")
-    neutral   = sum(1 for a in all_analysis if a[0] == "중립")
-    bot_count = sum(1 for a in all_analysis if a[3])
-
-    yield _sse("summary", {
-        "positiveSummary": summary["positive_summary"],
-        "negativeSummary": summary["negative_summary"],
-        "neutralSummary":  summary["neutral_summary"],
-        "specialNotes":    summary["special_notes"],
-    })
-    yield _sse("stats", {
-        "total": total,
-        "positive": positive,
-        "negative": negative,
-        "neutral": neutral,
-        "positivePct": round(positive / total * 100, 1),
-        "negativePct": round(negative / total * 100, 1),
-        "neutralPct":  round(neutral  / total * 100, 1),
-        "botCount": bot_count,
-        "botPct": round(bot_count / total * 100, 1),
-    })
-    yield _sse("done", {})
-
-
 # ===== API 엔드포인트 =====
 
 @app.get("/health")
 def health():
     return {"status": "ok", "engine": "gpt-4o-mini"}
 
-
-# ── 기존 방식 (단일 JSON 응답) ──────────────────────────────────────────────
 
 @app.get("/analyze/youtube/{video_id}", response_model=YoutubeResult)
 async def analyze_youtube_by_id(video_id: str):
@@ -611,108 +526,29 @@ async def analyze_youtube_by_id(video_id: str):
         raise HTTPException(status_code=404, detail="수집된 댓글이 없습니다.")
 
     try:
-        results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
+        out = await _analyze_comments(comments)
         return YoutubeResult(
             videoTitle=video_title,
             channelName=channel_name,
             viewCount=view_count,
             publishedAt=published_at,
             videoCommentCount=comment_count_str,
-            total=total,
-            positive=positive,
-            negative=negative,
-            neutral=neutral,
-            positivePct=round(positive / total * 100, 1),
-            negativePct=round(negative / total * 100, 1),
-            neutralPct=round(neutral  / total * 100, 1),
-            botCount=bot_count,
-            botPct=round(bot_count / total * 100, 1),
-            positiveSummary=pos_sum,
-            negativeSummary=neg_sum,
-            neutralSummary=neu_sum,
-            specialNotes=notes,
-            comments=results,
+            total=out.total,
+            positive=out.positive,
+            negative=out.negative,
+            neutral=out.neutral,
+            positivePct=round(out.positive / out.total * 100, 1),
+            negativePct=round(out.negative / out.total * 100, 1),
+            neutralPct=round(out.neutral   / out.total * 100, 1),
+            botCount=out.bot_count,
+            botPct=round(out.bot_count / out.total * 100, 1),
+            positiveSummary=out.positive_summary,
+            negativeSummary=out.negative_summary,
+            neutralSummary=out.neutral_summary,
+            specialNotes=out.special_notes,
+            comments=out.results,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/analyze/comments", response_model=YoutubeResult)
-async def analyze_comments_direct(comments: List[CommentItem]):
-    if not comments:
-        raise HTTPException(status_code=400, detail="댓글이 없습니다.")
-    try:
-        results, positive, negative, neutral, bot_count, total, pos_sum, neg_sum, neu_sum, notes = await _analyze_comments(comments)
-        return YoutubeResult(
-            videoTitle="직접 입력",
-            videoCommentCount=str(total),
-            total=total,
-            positive=positive,
-            negative=negative,
-            neutral=neutral,
-            positivePct=round(positive / total * 100, 1),
-            negativePct=round(negative / total * 100, 1),
-            neutralPct=round(neutral  / total * 100, 1),
-            botCount=bot_count,
-            botPct=round(bot_count / total * 100, 1),
-            positiveSummary=pos_sum,
-            negativeSummary=neg_sum,
-            neutralSummary=neu_sum,
-            specialNotes=notes,
-            comments=results,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── SSE 스트리밍 방식 ──────────────────────────────────────────────────────
-
-@app.get("/analyze/youtube/{video_id}/stream")
-async def stream_youtube(video_id: str):
-    """
-    SSE 스트리밍 엔드포인트.
-    댓글이 분석되는 즉시 배치 단위로 클라이언트에 전송합니다.
-
-    이벤트 종류:
-      meta     — 영상 정보 및 총 댓글 수
-      comment  — 개별 댓글 분석 결과 (index 순서대로)
-      progress — 배치 완료 진행률
-      summary  — GPT 여론 요약
-      stats    — 최종 통계
-      done     — 완료 신호
-    """
-    if not youtube:
-        raise HTTPException(status_code=503, detail="YOUTUBE_API_KEY가 설정되지 않았습니다.")
-
-    try:
-        video_title, channel_name, view_count, published_at, comment_count_str, comments = await asyncio.get_event_loop().run_in_executor(
-            None, _fetch_youtube_comments, video_id
-        )
-    except HTTPException:
-        raise
-    except HttpError as e:
-        if "commentsDisabled" in str(e):
-            raise HTTPException(status_code=403, detail="댓글이 비활성화된 영상입니다.")
-        raise HTTPException(status_code=500, detail=f"YouTube API 오류: {str(e)}")
-
-    if not comments:
-        raise HTTPException(status_code=404, detail="수집된 댓글이 없습니다.")
-
-    return StreamingResponse(
-        _stream_analysis(comments, video_title, comment_count_str, channel_name, view_count, published_at),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/analyze/comments/stream")
-async def stream_comments_direct(comments: List[CommentItem]):
-    """댓글 직접 입력 SSE 스트리밍 버전."""
-    if not comments:
-        raise HTTPException(status_code=400, detail="댓글이 없습니다.")
-
-    return StreamingResponse(
-        _stream_analysis(comments, "직접 입력", str(len(comments))),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
