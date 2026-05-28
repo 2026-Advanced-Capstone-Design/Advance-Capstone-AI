@@ -1,6 +1,7 @@
 import json
 import logging
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from config import GOOGLE_FACTCHECK_API_KEY, OPENAI_API_KEY, GPT_MINI_MODEL
 
@@ -153,10 +154,9 @@ def check_facts(key_facts: list[str]) -> dict:
 
     google_results = []
     if GOOGLE_FACTCHECK_API_KEY:
-        for fact in key_facts[:3]:
-            result = _fetch_google_result(fact)
-            if result:
-                google_results.append(result)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(_fetch_google_result, key_facts[:3]))
+        google_results = [r for r in results if r is not None]
 
     result = _gpt_check(key_facts, google_results)
     return {

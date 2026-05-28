@@ -1,6 +1,7 @@
 import os
 import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, request, jsonify
 from models.task import create_task, update_task, TaskStatus
 from services.preprocessor import preprocess
@@ -54,28 +55,32 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
         preprocessed = preprocess(text, is_html=is_html)
         cleaned_text = preprocessed["cleaned"]
 
-        # Step 2: 요약 / 키워드 생성
-        summary = summarize(cleaned_text)
+        # Step 2 + Step 4: 요약/키워드 생성 & 섹션별 편향 레이블 병렬 실행
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_summary = executor.submit(summarize, cleaned_text)
+            future_label = executor.submit(label, cleaned_text)
+            summary = future_summary.result()
+            label_result = future_label.result()
 
-        # Step 3: Fact Check (Google 우선 → GPT 종합)
-        factcheck_result = check_facts(summary.get("key_facts", []))
-        fact_ratio_source = factcheck_result.get("fact_ratio")
-
-        # Step 4: 섹션별 편향 레이블 (Few-shot + CoT 3단계)
-        label_result = label(cleaned_text)
         bias_label = label_result.get("overall_label", "uncertain")
 
-        # Step 5: Generated Knowledge + CoT 2단계 편향 분석
-        analysis = run_analysis(
-            text=cleaned_text,
-            topic=summary.get("topic", ""),
-            keywords=summary.get("keywords", []),
-            bias_label=bias_label,
-            sentences=preprocessed["sentences"],
-            sections=label_result.get("sections", []),
-        )
+        # Step 3 + Step 5: Fact Check & 편향 분석 병렬 실행
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_factcheck = executor.submit(check_facts, summary.get("key_facts", []))
+            future_analysis = executor.submit(
+                run_analysis,
+                text=cleaned_text,
+                topic=summary.get("topic", ""),
+                keywords=summary.get("keywords", []),
+                bias_label=bias_label,
+                sentences=preprocessed["sentences"],
+                sections=label_result.get("sections", []),
+            )
+            factcheck_result = future_factcheck.result()
+            analysis = future_analysis.result()
 
         # fact_ratio: Google 결과 우선, 없으면 CoT 기반
+        fact_ratio_source = factcheck_result.get("fact_ratio")
         fact_ratio = fact_ratio_source if fact_ratio_source is not None \
             else analysis.get("fact_ratio", 0.5)
 
