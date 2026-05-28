@@ -169,6 +169,14 @@ def _make_topic_key(topic: str, keywords: list[str]) -> str:
     return f"{topic.strip().lower()}:{','.join(sorted(k.strip().lower() for k in keywords))}"
 
 
+def precompute_background(topic: str, keywords: list[str]) -> None:
+    """summarize 완료 직후 호출 — background를 캐시에 미리 적재"""
+    topic_key = _make_topic_key(topic, keywords)
+    if get_background(topic_key) is None:
+        background = _generate_background(topic, keywords)
+        set_background(topic_key, background)
+
+
 def analyze(text: str, topic: str, keywords: list[str], bias_label: str,
             sentences: list[str] = None, sections: list[dict] = None) -> dict:
     """

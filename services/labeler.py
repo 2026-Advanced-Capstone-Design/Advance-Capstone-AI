@@ -217,7 +217,7 @@ def label(text: str) -> dict:
         model=GPT_MINI_MODEL,
         messages=messages,
         temperature=0.1,
-        max_tokens=1500,
+        max_tokens=1200,
         response_format={"type": "json_object"},
     )
 

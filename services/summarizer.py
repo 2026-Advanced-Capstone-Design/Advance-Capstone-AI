@@ -41,7 +41,7 @@ def summarize(text: str) -> dict:
             {"role": "user", "content": _USER_PROMPT_TEMPLATE.format(text=truncated)},
         ],
         temperature=0.2,
-        max_tokens=1500,
+        max_tokens=600,
         response_format={"type": "json_object"},
     )
 

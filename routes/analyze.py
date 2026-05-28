@@ -8,7 +8,7 @@ from services.preprocessor import preprocess
 from services.summarizer import summarize
 from services.labeler import label
 from services.factcheck import check_facts
-from services.analyzer import analyze as run_analysis
+from services.analyzer import analyze as run_analysis, precompute_background
 from config import SPRING_CALLBACK_URL
 
 MOCK_MODE = os.environ.get("MOCK_MODE", "false").lower() == "true"
@@ -55,12 +55,22 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
         preprocessed = preprocess(text, is_html=is_html)
         cleaned_text = preprocessed["cleaned"]
 
-        # Step 2 + Step 4: 요약/키워드 생성 & 섹션별 편향 레이블 병렬 실행
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        # Step 2 + Step 4: 요약/라벨 병렬 실행
+        # summarize 완료 즉시 background 사전 적재 → label 남은 시간에 겹쳐 실행
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_summary = executor.submit(summarize, cleaned_text)
-            future_label = executor.submit(label, cleaned_text)
+            future_label   = executor.submit(label, cleaned_text)
+
+            # summarize가 끝나는 순간 background 생성 시작 (label은 아직 실행 중)
             summary = future_summary.result()
-            label_result = future_label.result()
+            future_bg = executor.submit(
+                precompute_background,
+                summary.get("topic", ""),
+                summary.get("keywords", []),
+            )
+
+            label_result = future_label.result()  # label 완료 대기
+            future_bg.result()                    # background도 완료 보장
 
         bias_label = label_result.get("overall_label", "uncertain")
 
