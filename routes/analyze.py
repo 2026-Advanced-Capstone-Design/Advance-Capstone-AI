@@ -1,6 +1,7 @@
 import os
 import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, request, jsonify
 from models.task import create_task, update_task, TaskStatus
 from services.preprocessor import preprocess
@@ -54,16 +55,19 @@ def _run_pipeline(task_id: str, article_id: int, text: str, input_type: str):
         preprocessed = preprocess(text, is_html=is_html)
         cleaned_text = preprocessed["cleaned"]
 
-        # Step 2: 요약 / 키워드 생성
-        summary = summarize(cleaned_text)
+        # Step 2 (요약) + Step 4 (라벨링) 병렬 처리
+        # 둘 다 cleaned_text만 입력으로 받으며 서로 독립적이므로 동시 실행 가능
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_summary = executor.submit(summarize, cleaned_text)
+            future_label = executor.submit(label, cleaned_text)
+            summary = future_summary.result()
+            label_result = future_label.result()
 
-        # Step 3: Fact Check (Google 우선 → GPT 종합)
+        bias_label = label_result.get("overall_label", "uncertain")
+
+        # Step 3: Fact Check (Step 2 결과 필요 - 순차 진행)
         factcheck_result = check_facts(summary.get("key_facts", []))
         fact_ratio_source = factcheck_result.get("fact_ratio")
-
-        # Step 4: 섹션별 편향 레이블 (Few-shot + CoT 3단계)
-        label_result = label(cleaned_text)
-        bias_label = label_result.get("overall_label", "uncertain")
 
         # Step 5: Generated Knowledge + CoT 2단계 편향 분석
         analysis = run_analysis(
